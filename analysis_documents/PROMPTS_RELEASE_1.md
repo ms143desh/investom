@@ -708,23 +708,335 @@ The full testing prompts are in Prompts 20–22. Define the strategy here so it 
 
 Ask your AI assistant to scaffold the complete monorepo with the following instructions:
 
+---
+
+### 1.1 Root Monorepo Setup
+
 Scaffold a TypeScript monorepo named `investom` using the exact folder structure defined in Prompt 0 Section 0.3. Use npm workspaces (not Turborepo — keep it simple for R1).
 
-For the Next.js app (`apps/web`): initialise Next.js 15 with App Router and TypeScript strict mode. Install and configure TailwindCSS v3, shadcn/ui (run the shadcn init command), TanStack Query v5, Zustand, React Hook Form, and Zod. Install Sentry for Next.js and configure it with the `NEXT_PUBLIC_SENTRY_DSN` environment variable. Configure the `next.config.ts` with all security headers defined in Prompt 0 Section 0.7.
+Create a root `package.json` with the following workspaces configuration:
+```json
+{
+  "name": "investom",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}
+```
 
-For the Node.js API (`apps/api`): initialise a Fastify v4 TypeScript project. Install and configure: Prisma v5 (initialise with PostgreSQL provider), Zod, BullMQ, the Supabase JS client, Upstash Redis client (`@upstash/redis`), `@fastify/cors`, `@fastify/helmet`, `@fastify/rate-limit`, `@fastify/sensible`. Configure environment variable validation using Zod at server startup. Configure Sentry.
+Create a root `.gitignore` that includes: `node_modules`, `.env`, `.env.local`, `.env.*.local`, `dist`, `build`, `.next`, `__pycache__`, `*.pyc`, `.pytest_cache`, `.venv`, `*.egg-info`.
 
-For the Python AI service (`services/ai`): initialise a FastAPI project with Python 3.11+. Install: anthropic, openai, fastapi, uvicorn, pydantic v2, pandas, pandas-ta, python-dotenv, pytest, httpx (for test client). Set up a `pyproject.toml` with all dependencies pinned to specific versions.
+Copy the existing `.env.example` to the root — this is the single env file for local development shared across all services. Each service reads from `process.env` (Node.js) or `python-dotenv` (Python) pointing at the root `.env`.
 
-For the shared package (`packages/shared`): create TypeScript type files for `Stock`, `UserProfile`, `Alert`, `Notification`, `ChatMessage`. These types must match the database schema defined in Prompt 0 Section 0.4 exactly.
+Create a root `tsconfig.base.json` with strict mode settings that all TypeScript packages extend:
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}
+```
 
-After scaffolding, verify that:
+---
 
-- `npm run dev` starts the Next.js app on port 3000 without errors
-- `npm run dev` in `apps/api` starts the Fastify server on port 3001 without errors
-- `uvicorn app.main:app --reload` in `services/ai` starts the FastAPI server on port 8000 without errors
-- Running `npm run test` in each TypeScript project runs Vitest and exits cleanly (even with zero tests)
-- Running `pytest` in `services/ai` runs and exits cleanly
+### 1.2 Next.js Frontend (`apps/web`)
+
+Initialise Next.js 15 with App Router and TypeScript strict mode. The `tsconfig.json` must extend the root `tsconfig.base.json`.
+
+**Install all dependencies:**
+```
+next@15  react@19  react-dom@19
+typescript  @types/node  @types/react  @types/react-dom
+tailwindcss@3  postcss  autoprefixer
+@tanstack/react-query@5  @tanstack/react-query-devtools@5
+zustand@5
+react-hook-form  @hookform/resolvers
+zod
+@supabase/supabase-js  @supabase/ssr
+recharts
+@sentry/nextjs
+```
+
+**shadcn/ui setup:** Run `npx shadcn@latest init` and select: New York style, zinc base colour, CSS variables enabled. Then install the following components one by one (do not use `add --all`):
+```
+npx shadcn@latest add button input dialog sheet badge card
+npx shadcn@latest add dropdown-menu toast skeleton tabs
+npx shadcn@latest add scroll-area separator avatar command tooltip
+npx shadcn@latest add sonner  ← use Sonner for toasts, not the default Toast
+```
+
+**Configure `next.config.ts`** with:
+- Security headers from Prompt 0 Section 0.7 (CSP, HSTS, X-Frame-Options, etc.)
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SENTRY_DSN` all declared under `env` so Next.js validates they are present at build time
+
+**Configure Sentry** using `npx @sentry/wizard@latest -i nextjs`. Use the `NEXT_PUBLIC_SENTRY_DSN` env var. Enable only in `ENVIRONMENT !== 'development'` so local dev is not cluttered with Sentry noise.
+
+**Create the following foundational files** (empty implementations, wired up correctly):
+- `apps/web/lib/supabase/client.ts` — browser Supabase client using `createBrowserClient` from `@supabase/ssr` with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+- `apps/web/lib/supabase/server.ts` — server Supabase client using `createServerClient` from `@supabase/ssr` (reads cookies)
+- `apps/web/lib/tanstack/provider.tsx` — TanStack Query client provider (`'use client'`, wraps children with `QueryClientProvider`)
+- `apps/web/lib/tanstack/keys.ts` — query key factory (empty object to be filled per feature)
+- `apps/web/lib/zustand/chat-store.ts` — Zustand store with `isOpen: false` and `setIsOpen` action
+- `apps/web/lib/utils/format.ts` — empty stub with exported functions: `formatCurrency`, `formatPercentage`, `formatDate`, `formatRelativeTime`
+- `apps/web/app/layout.tsx` — root layout wrapping children with the TanStack Query provider and `Toaster` (Sonner)
+
+**Add scripts to `apps/web/package.json`:**
+```json
+"dev": "next dev",
+"build": "next build",
+"start": "next start",
+"lint": "next lint",
+"typecheck": "tsc --noEmit",
+"test": "vitest run",
+"test:watch": "vitest"
+```
+
+Install `vitest`, `@vitejs/plugin-react`, `@testing-library/react`, `@testing-library/jest-dom`, `jsdom` as dev dependencies. Create `vitest.config.ts` with jsdom environment.
+
+---
+
+### 1.3 Node.js API Server (`apps/api`)
+
+Initialise a Fastify v4 TypeScript project. The `tsconfig.json` must extend the root `tsconfig.base.json` and set `"module": "NodeNext"`, `"moduleResolution": "NodeNext"`.
+
+**Install all dependencies:**
+```
+fastify@4
+@fastify/cors  @fastify/helmet  @fastify/rate-limit  @fastify/sensible
+@supabase/supabase-js  @supabase/ssr
+@prisma/client  prisma
+bullmq
+@upstash/redis
+@upstash/ratelimit  ← use Upstash's own rate limit library for distributed rate limiting
+zod
+@sentry/node
+pino  pino-pretty  ← Fastify's built-in logger, pretty-print in development
+```
+
+**Install dev dependencies:** `typescript`, `@types/node`, `tsx` (for running TypeScript directly), `vitest`, `@vitest/coverage-v8`.
+
+**Create `apps/api/src/lib/env.ts`** — Zod schema that validates all environment variables on import. Every required variable must be listed. If any are missing, throw with a clear message listing the missing variable name. Export the validated `env` object — all other files must import from this file, never from `process.env` directly:
+```typescript
+// Pattern — AI assistant must implement this fully
+import { z } from 'zod'
+const schema = z.object({
+  DATABASE_URL: z.string().url(),
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_SECRET_KEY: z.string().min(1),
+  REDIS_URL: z.string().url(),
+  REDIS_TOKEN: z.string().min(1),
+  AI_SERVICE_URL: z.string().url(),
+  AI_SERVICE_API_KEY: z.string().min(1),
+  PORT: z.coerce.number().default(3001),
+  NODE_ENV: z.enum(['development', 'staging', 'production']).default('development'),
+  ENVIRONMENT: z.enum(['development', 'staging', 'production']).default('development'),
+  RATE_LIMIT_MAX: z.coerce.number().default(60),
+  RATE_LIMIT_AUTH_MAX: z.coerce.number().default(300),
+  RATE_LIMIT_AI_MAX: z.coerce.number().default(10),
+  // Optional vars — presence checked at feature usage, not startup
+  EODHD_API_KEY: z.string().optional(),
+  ALPHA_VANTAGE_API_KEY: z.string().optional(),
+  RESEND_API_KEY: z.string().optional(),
+  FIREBASE_SERVICE_ACCOUNT_JSON: z.string().optional(),
+  SENTRY_DSN: z.string().optional(),
+})
+export const env = schema.parse(process.env)
+```
+
+**Create the following foundational files:**
+- `apps/api/src/lib/prisma/client.ts` — Prisma client singleton (create once, reuse across requests)
+- `apps/api/src/lib/redis/client.ts` — Upstash Redis client using `REDIS_URL` and `REDIS_TOKEN` from `env`
+- `apps/api/src/lib/supabase/admin.ts` — Supabase admin client using `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (service role, for server operations)
+- `apps/api/src/plugins/auth.ts` — Fastify plugin that adds a `preHandler` hook: calls `supabase.auth.getUser()` with the Bearer token and attaches `request.userId`. Returns 401 if token is missing or invalid.
+- `apps/api/src/plugins/cors.ts` — `@fastify/cors` configured to allow only `NEXT_PUBLIC_APP_URL` origin
+- `apps/api/src/plugins/rate-limit.ts` — `@fastify/rate-limit` using Upstash Redis store with limits from `env`
+- `apps/api/src/server.ts` — Fastify instance wiring all plugins and a `GET /health` route that returns `{ status: 'ok', environment: env.ENVIRONMENT }`
+- `apps/api/src/index.ts` — entry point that imports `env` first (triggers validation), then starts the server on `env.PORT`
+
+**Prisma initialisation:** Run `npx prisma init --datasource-provider postgresql`. The `schema.prisma` will be populated in Prompt 2 — leave it with just the datasource and generator blocks for now.
+
+**Add scripts to `apps/api/package.json`:**
+```json
+"dev": "tsx watch src/index.ts",
+"build": "tsc",
+"start": "node dist/index.js",
+"typecheck": "tsc --noEmit",
+"test": "vitest run",
+"test:watch": "vitest",
+"db:migrate": "prisma migrate dev",
+"db:push": "prisma db push",
+"db:studio": "prisma studio"
+```
+
+---
+
+### 1.4 Python AI Service (`services/ai`)
+
+Initialise a FastAPI project with Python 3.11+. Use a virtual environment at `services/ai/.venv`.
+
+**Create `services/ai/pyproject.toml`** with all dependencies pinned to specific versions:
+```toml
+[project]
+name = "investom-ai"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.115.0",
+  "uvicorn[standard]==0.30.6",
+  "pydantic==2.9.2",
+  "anthropic==0.34.2",
+  "openai==1.47.0",
+  "pandas==2.2.3",
+  "pandas-ta==0.3.14b0",
+  "numpy==1.26.4",
+  "yfinance==0.2.44",
+  "python-dotenv==1.0.1",
+  "httpx==0.27.2",
+  "supabase==2.7.4",
+  "modal==0.64.10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.3",
+  "pytest-asyncio==0.24.0",
+  "pytest-cov==5.0.0",
+  "httpx==0.27.2",
+]
+```
+
+**Create `services/ai/app/config.py`** — Pydantic Settings class that reads all env vars. Validate at import with clear error messages. Map to the same variable names as the `.env.example`:
+```python
+from pydantic_settings import BaseSettings
+from typing import Literal
+
+class Settings(BaseSettings):
+    # Required
+    ai_service_api_key: str
+    supabase_url: str
+    supabase_secret_key: str
+    environment: Literal['development', 'staging', 'production'] = 'development'
+
+    # Free tier LLM (development)
+    gemini_api_key: str | None = None
+    gemini_model: str = 'gemini-1.5-flash'
+    xai_api_key: str | None = None
+    xai_model: str = 'grok-3-mini'
+    huggingface_api_key: str | None = None
+    huggingface_embedding_model: str = 'sentence-transformers/all-MiniLM-L6-v2'
+
+    # Paid providers (staging/production)
+    anthropic_api_key: str | None = None
+    anthropic_model: str = 'claude-haiku-4-5'
+    openai_api_key: str | None = None
+    openai_llm_model: str = 'gpt-4o-mini'
+    openai_embedding_model: str = 'text-embedding-3-small'
+
+    # Market data
+    eodhd_api_key: str | None = None
+    alpha_vantage_api_key: str | None = None
+
+    class Config:
+        env_file = '../../.env'  # reads from root .env during local development
+        case_sensitive = False
+
+settings = Settings()
+```
+
+**Create `services/ai/app/main.py`** — FastAPI app with:
+- API key security dependency that checks `X-API-Key` header against `settings.ai_service_api_key`
+- `GET /health` route returning active provider summary (which LLM and market data providers are active based on which keys are present and `ENVIRONMENT`)
+- Router registration stubs for: `/ai/chat`, `/ai/screener`, `/ai/stock` (empty routers to be implemented in later prompts)
+- Startup log listing active providers per the format in Prompt 0 Section 0.6
+
+**Create `services/ai/app/services/llm_provider.py`** — provider selection logic implementing the fallback chain from Prompt 0 Section 0.6:
+- In `development`: use Gemini (`GEMINI_API_KEY`) as primary, xAI Grok (`XAI_API_KEY`) as fallback
+- In `staging/production`: use Anthropic (`ANTHROPIC_API_KEY`) as primary, OpenAI (`OPENAI_API_KEY`) as fallback
+- Both Gemini and xAI use the OpenAI Python SDK with their respective `base_url` values
+- Expose a single `async def call_llm(messages, system_prompt) -> str` function that picks the right provider automatically
+- Expose a single `async def get_embedding(text) -> list[float]` function that picks HuggingFace (dev) or OpenAI (prod)
+
+**Install `pydantic-settings`** separately: `pip install pydantic-settings==2.5.2`.
+
+**Add `services/ai/pytest.ini`:**
+```ini
+[pytest]
+asyncio_mode = auto
+testpaths = tests
+```
+
+---
+
+### 1.5 Shared Types Package (`packages/shared`)
+
+Create TypeScript type files that match the database schema from Prompt 0 Section 0.4 exactly. These types are imported by both `apps/web` and `apps/api`.
+
+**`packages/shared/types/stock.ts`** — `Stock`, `StockPrice`, `StockFundamentals`, `CorporateAction`, `StockOverview` (assembled response type), `MarketCapCategory`, `Exchange`
+
+**`packages/shared/types/user.ts`** — `UserProfile`, `UserRiskProfile`, `ExperienceLevel`, `RiskAppetite`, `InvestmentHorizon`, `PrimaryGoal`
+
+**`packages/shared/types/alert.ts`** — `PriceAlert`, `Notification`, `AlertType`, `NotificationType`
+
+**`packages/shared/types/chat.ts`** — `ChatConversation`, `ChatMessage`, `ChatRole`, `QueryType`
+
+**`packages/shared/types/watchlist.ts`** — `Watchlist`, `WatchlistItem`
+
+**`packages/shared/package.json`:**
+```json
+{
+  "name": "@investom/shared",
+  "version": "0.1.0",
+  "main": "./types/index.ts",
+  "types": "./types/index.ts"
+}
+```
+
+**`packages/shared/types/index.ts`** — re-exports everything from all type files.
+
+Reference this package in `apps/web` and `apps/api` as `"@investom/shared": "*"` in their `package.json` dependencies.
+
+---
+
+### 1.6 Verification Checklist
+
+After scaffolding, verify all of the following before proceeding to Prompt 2:
+
+**Next.js (`apps/web`):**
+- [ ] `npm run dev` starts on port 3000 with no errors
+- [ ] `http://localhost:3000` returns a page (even if blank)
+- [ ] `npm run typecheck` exits with 0 errors
+- [ ] `npm run test` runs Vitest and exits cleanly (zero tests is fine)
+- [ ] Security headers are visible in browser DevTools → Network → response headers on the homepage
+- [ ] Supabase browser client initialises without throwing (check console)
+
+**Node.js API (`apps/api`):**
+- [ ] `npm run dev` starts on port 3001 with no errors
+- [ ] `curl http://localhost:3001/health` returns `{"status":"ok","environment":"development"}`
+- [ ] `npm run typecheck` exits with 0 errors
+- [ ] `npm run test` runs Vitest and exits cleanly
+- [ ] If a required env var is removed from `.env`, the server refuses to start and logs the missing variable name clearly
+
+**Python AI Service (`services/ai`):**
+- [ ] `uvicorn app.main:app --reload` starts on port 8000 with no errors
+- [ ] `curl http://localhost:8000/health` returns the active providers summary — it must show Gemini and xAI as active (since those keys are set in `.env`)
+- [ ] `curl -H "X-API-Key: wrong"  http://localhost:8000/health` returns 403
+- [ ] `pytest` runs and exits cleanly (zero tests is fine)
+- [ ] Startup log clearly shows which LLM and market data providers are active
+
+**Shared package:**
+- [ ] `apps/web` and `apps/api` can both import `@investom/shared` types without TypeScript errors
 
 ---
 

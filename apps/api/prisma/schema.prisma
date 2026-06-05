@@ -1,0 +1,13 @@
+// This is your Prisma schema file
+// Tables are defined in Prompt 2 — this file is a placeholder
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}

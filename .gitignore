@@ -26,6 +26,25 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Node
+node_modules/
+.next/
+dist/
+build/
+.env.local
+.env.*.local
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editors
+.DS_Store
+.idea/
+.vscode/settings.json
+
 # PyInstaller
 #   Usually these files are written by a python script from a template
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
